@@ -4,6 +4,7 @@
 #include "device.h"
 #include <stdbool.h>
 #include <stdlib.h>
+#include <math.h>
 
 volatile ConverterState_t g_converterState = CONVERTER_STATE_IDLE;
 
@@ -33,20 +34,18 @@ static int bufferIndex = 0;
 
 static int readSimulatedADC(void)
 {
-    adcValue += adcStep;
+    static float angle = 0.0;
 
-    if(adcValue >= 500)
-    {
-        adcStep = -50;
-    }
+    angle += 0.1;
 
-    if(adcValue <= -500)
+    if(angle >= 6.28)
     {
-        adcStep = 50;
+        angle = 0;
     }
 
     int noise = (rand() % 101) - 50;
-    return adcValue + noise;
+
+    return (int)(2048 + 1000 * sin(angle) + noise);
 }
 
 static int movingAverageFilter(int newSample)
@@ -73,16 +72,15 @@ static int movingAverageFilter(int newSample)
 void FSM_Init(void)
 {
 
-    pwmCounter++;
 
-if(pwmCounter >= 100)
-{
-    pwmCounter = 0;
-}
     g_converterState = CONVERTER_STATE_IDLE;
 
     g_enableModulation = false;
 
+    for(int i = 0; i < FILTER_SIZE; i++)
+    {
+        adcBuffer[i] = 0;
+    }
 
     GPIO_setPadConfig(31, GPIO_PIN_TYPE_STD);
     GPIO_setDirectionMode(31, GPIO_DIR_MODE_OUT);
@@ -98,9 +96,18 @@ if(pwmCounter >= 100)
 
 void FSM_RunCycle(void)
 {
+        pwmCounter++;
+
+if(pwmCounter >= 100)
+{
+    pwmCounter = 0;
+}
+
     int rawValue = readSimulatedADC();
 
-    filteredValue = movingAverageFilter(rawValue);
+    int centeredValue = rawValue - 2048;
+
+    filteredValue = movingAverageFilter(centeredValue);
 
     dutyCycle = abs(filteredValue) / 5;
 
