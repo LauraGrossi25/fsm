@@ -3,245 +3,184 @@
 #include "driverlib.h"
 #include "device.h"
 #include <stdbool.h>
+#include <stdlib.h>
 
-// --- Variáveis de Estado Globais do Módulo (Definição) ---
-volatile ConverterState_t g_converterState = CONVERTER_STATE_INIT;
-volatile unsigned int g_faultFlags = 0U;
-volatile unsigned long g_operationCounter = 0UL;
+volatile ConverterState_t g_converterState = CONVERTER_STATE_IDLE;
 
-// --- Variáveis Internas (simulação de eventos) ---
-static unsigned int startup_counter = 0U;
-static bool enable_cmd = false;
-static bool oc_fault_sim = false;
-static bool ov_fault_sim = false;
-static bool ot_fault_sim = false;
-static bool comm_err_sim = false;
-static unsigned int recovery_counter = 0U;
+volatile bool g_enableModulation = false;
 
-// Protótipos das Funções Handler de Estado (Internas)
-static void state_init_handler(void);
-static void state_standby_handler(void);
-static void state_operating_handler(void);
-static void state_fault_overcurrent_handler(void);
-static void state_fault_overvoltage_handler(void);
-static void state_fault_temp_handler(void);
-static void state_fault_comm_handler(void);
-static void state_recovering_handler(void);
+static int filteredValue = 500;
 
-// Funções de Evento Simuladas (Internas)
-static bool check_startup_complete(void);
-static bool check_enable_command(void);
-static bool check_overcurrent_fault(void);
-static bool check_overvoltage_fault(void);
-static bool check_overtemp_fault(void);
-static bool check_comm_error(void);
-static bool check_recovery_complete(void);
+static int adcValue = -500;
 
+static int adcStep = 50;
 
-// --- Implementações das Funções Públicas do Módulo FSM ---
+static int filteredHistory[100];
+
+static int rawHistory[100];
+
+static int historyIndex = 0;
+
+static int pwmCounter = 0;
+
+static int dutyCycle = 0;
+
+#define FILTER_SIZE 16
+
+static int adcBuffer[FILTER_SIZE];
+
+static int bufferIndex = 0;
+
+static int readSimulatedADC(void)
+{
+    adcValue += adcStep;
+
+    if(adcValue >= 500)
+    {
+        adcStep = -50;
+    }
+
+    if(adcValue <= -500)
+    {
+        adcStep = 50;
+    }
+
+    int noise = (rand() % 101) - 50;
+    return adcValue + noise;
+}
+
+static int movingAverageFilter(int newSample)
+{
+    int sum = 0;
+
+    adcBuffer[bufferIndex] = newSample;
+
+    bufferIndex++;
+
+    if(bufferIndex >= FILTER_SIZE)
+    {
+        bufferIndex = 0;
+    }
+
+    for(int i = 0; i < FILTER_SIZE; i++)
+    {
+        sum += adcBuffer[i];
+    }
+
+    return sum / FILTER_SIZE;
+}
 
 void FSM_Init(void)
 {
-    g_converterState = CONVERTER_STATE_INIT;
-    g_faultFlags = 0U;
-    g_operationCounter = 0UL;
 
-    // Resetar contadores das funções de evento simuladas
-    startup_counter = 0U;
-    enable_cmd = false;
-    oc_fault_sim = false;
-    ov_fault_sim = false;
-    ot_fault_sim = false;
-    comm_err_sim = false;
-    recovery_counter = 0U;
+    pwmCounter++;
+
+if(pwmCounter >= 100)
+{
+    pwmCounter = 0;
 }
+    g_converterState = CONVERTER_STATE_IDLE;
+
+    g_enableModulation = false;
+
+
+    GPIO_setPadConfig(31, GPIO_PIN_TYPE_STD);
+    GPIO_setDirectionMode(31, GPIO_DIR_MODE_OUT);
+
+    GPIO_setPadConfig(34, GPIO_PIN_TYPE_STD);
+    GPIO_setDirectionMode(34, GPIO_DIR_MODE_OUT);
+
+
+    GPIO_writePin(31,1);
+    GPIO_writePin(34,1);
+}
+
 
 void FSM_RunCycle(void)
 {
-    // Despacho baseado no estado atual usando switch-case
-    switch (g_converterState)
+    int rawValue = readSimulatedADC();
+
+    filteredValue = movingAverageFilter(rawValue);
+
+    dutyCycle = abs(filteredValue) / 5;
+
+    if(dutyCycle > 100)
+{
+    dutyCycle = 100;
+}
+
+    rawHistory[historyIndex] = rawValue;
+    
+    filteredHistory[historyIndex] = filteredValue;
+
+    historyIndex++;
+
+if(historyIndex >= 100)
+{
+    historyIndex = 0;
+}
+
+    if(g_enableModulation == false)
     {
-        case CONVERTER_STATE_INIT:
-            state_init_handler();
+        g_converterState = CONVERTER_STATE_IDLE;
+    }
+    else
+    {
+        if(filteredValue > 0)
+        {
+            g_converterState = CONVERTER_STATE_POSITIVE;
+        }
+        else
+        {
+            g_converterState = CONVERTER_STATE_NEGATIVE;
+        }
+    }
+
+
+    switch(g_converterState)
+    {
+        case CONVERTER_STATE_IDLE:
+
+            GPIO_writePin(31,1);
+            GPIO_writePin(34,1);
+
             break;
 
-        case CONVERTER_STATE_STANDBY:
-            state_standby_handler();
+
+        case CONVERTER_STATE_POSITIVE:
+
+        if(pwmCounter < dutyCycle)
+        {
+            GPIO_writePin(31,0);
+        }
+        else
+        {
+            GPIO_writePin(31,1);
+        }
+
+        GPIO_writePin(34,1);
+
             break;
 
-        case CONVERTER_STATE_OPERATING:
-            state_operating_handler();
+
+        case CONVERTER_STATE_NEGATIVE:
+
+        GPIO_writePin(31,1);
+
+        if(pwmCounter < dutyCycle)
+        {
+            GPIO_writePin(34,0);
+        }
+        else
+        {
+            GPIO_writePin(34,1);
+        }
+
             break;
 
-        case CONVERTER_STATE_FAULT_OVERCURRENT:
-            state_fault_overcurrent_handler();
-            break;
-
-        case CONVERTER_STATE_FAULT_OVERVOLTAGE:
-            state_fault_overvoltage_handler();
-            break;
-
-        case CONVERTER_STATE_FAULT_TEMP:
-            state_fault_temp_handler();
-            break;
-
-        case CONVERTER_STATE_FAULT_COMM:
-            state_fault_comm_handler();
-            break;
-
-        case CONVERTER_STATE_RECOVERING:
-            state_recovering_handler();
-            break;
 
         default:
-            // Estado inválido: força entrada em estado de falta
-            g_converterState = CONVERTER_STATE_FAULT_OVERCURRENT;
+
             break;
     }
-}
-
-
-// --- Implementações das Funções Handler de Estado (Internas) ---
-
-void state_init_handler(void)
-{
-    if (check_startup_complete())
-    {
-        g_converterState = CONVERTER_STATE_STANDBY;
-    }
-}
-
-void state_standby_handler(void)
-{
-    if (check_enable_command())
-    {
-        g_converterState = CONVERTER_STATE_OPERATING;
-    }
-}
-
-void state_operating_handler(void)
-{
-    g_operationCounter++;
-
-    if (check_overcurrent_fault())
-    {
-        g_faultFlags |= FAULT_OVERCURRENT;
-        g_converterState = CONVERTER_STATE_FAULT_OVERCURRENT;
-    }
-    else if (check_overvoltage_fault())
-    {
-        g_faultFlags |= FAULT_OVERVOLTAGE;
-        g_converterState = CONVERTER_STATE_FAULT_OVERVOLTAGE;
-    }
-    // Outras verificações de falta podem ser adicionadas aqui se desejado
-}
-
-void state_fault_overcurrent_handler(void)
-{
-    if (check_recovery_complete())
-    {
-        g_faultFlags &= ~FAULT_OVERCURRENT;
-        g_converterState = CONVERTER_STATE_RECOVERING;
-    }
-}
-
-void state_fault_overvoltage_handler(void)
-{
-    if (check_recovery_complete())
-    {
-        g_faultFlags &= ~FAULT_OVERVOLTAGE;
-        g_converterState = CONVERTER_STATE_RECOVERING;
-    }
-}
-
-void state_fault_temp_handler(void)
-{
-    if (check_recovery_complete())
-    {
-        g_faultFlags &= ~FAULT_TEMPERATURE;
-        g_converterState = CONVERTER_STATE_RECOVERING;
-    }
-}
-
-void state_fault_comm_handler(void)
-{
-    if (check_recovery_complete())
-    {
-        g_faultFlags &= ~FAULT_COMM_ERROR;
-        g_converterState = CONVERTER_STATE_RECOVERING;
-    }
-}
-
-void state_recovering_handler(void)
-{
-    if (check_recovery_complete())
-    {
-        g_converterState = CONVERTER_STATE_STANDBY;
-    }
-}
-
-
-// --- Implementações das Funções de Evento Simuladas (Internas) ---
-
-static bool check_startup_complete(void) {
-    // Verifica se o estado é INIT e se o contador de inicialização excedeu o limite
-    if (g_converterState == CONVERTER_STATE_INIT) {
-        if (++startup_counter > TIME_STARTUP) {
-            startup_counter = 0U;
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool check_enable_command(void) {
-    // Simula comando de habilitação externo (ativado via depurador)
-    if (g_converterState == CONVERTER_STATE_STANDBY && enable_cmd) {
-        enable_cmd = false;
-        return true;
-    }
-    return false;
-}
-
-static bool check_overcurrent_fault(void) {
-    if (g_converterState == CONVERTER_STATE_OPERATING && oc_fault_sim) {
-        oc_fault_sim = false;
-        return true;
-    }
-    return false;
-}
-
-static bool check_overvoltage_fault(void) {
-    if (g_converterState == CONVERTER_STATE_OPERATING && ov_fault_sim) {
-        ov_fault_sim = false;
-        return true;
-    }
-    return false;
-}
-
-static bool check_overtemp_fault(void) {
-    if (g_converterState == CONVERTER_STATE_OPERATING && ot_fault_sim) {
-        ot_fault_sim = false;
-        return true;
-    }
-    return false;
-}
-
-static bool check_comm_error(void) {
-    if (g_converterState == CONVERTER_STATE_OPERATING && comm_err_sim) {
-        comm_err_sim = false;
-        return true;
-    }
-    return false;
-}
-
-static bool check_recovery_complete(void) {
-    // Verifica se está em algum estado de falta ou recuperação e se o contador excedeu o limite
-    if (g_converterState >= CONVERTER_STATE_FAULT_OVERCURRENT) {
-        if (++recovery_counter > TIME_RECOVERY) {
-            recovery_counter = 0U;
-            return true;
-        }
-    }
-    return false;
 }

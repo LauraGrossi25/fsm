@@ -14,24 +14,21 @@
 // --- Definições Públicas para Tempos ---
 #define TIME_STARTUP        5U        // Tempo de inicialização (em ciclos de FSM)
 #define TIME_RECOVERY       10U       // Tempo de recuperação (em ciclos de FSM)
-#define TIME_DELAY_US       1000000U  // Atraso de cada ciclo da FSM em microssegundos (1 segundo)
+#define TIME_DELAY_US 100000U // Atraso de cada ciclo da FSM em microssegundos (1 segundo)
 
 
 // --- Enumeração Pública para Estados do Conversor ---
 typedef enum
 {
-    CONVERTER_STATE_INIT,
-    CONVERTER_STATE_STANDBY,
-    CONVERTER_STATE_OPERATING,
-    CONVERTER_STATE_FAULT_OVERCURRENT,
-    CONVERTER_STATE_FAULT_OVERVOLTAGE,
-    CONVERTER_STATE_FAULT_TEMP,
-    CONVERTER_STATE_FAULT_COMM,
-    CONVERTER_STATE_RECOVERING
+    CONVERTER_STATE_IDLE,
+    CONVERTER_STATE_POSITIVE,
+    CONVERTER_STATE_NEGATIVE
+
 } ConverterState_t;
 
 // --- Variáveis de Estado Globais do Módulo (acessíveis externamente) ---
 extern volatile ConverterState_t g_converterState;
+extern volatile bool g_enableModulation;
 extern volatile unsigned int g_faultFlags;
 extern volatile unsigned long g_operationCounter;
 
